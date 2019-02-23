@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <script src="js/face-api.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/0.100.2/css/materialize.css">
+  <script type="text/javascript" src="https://code.jquery.com/jquery-2.1.1.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/0.100.2/js/materialize.min.js"></script>
+  <style>
+    #overlay, .overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+    }
+  </style>
+  <title>人脸识别测试</title>
+</head>
+<body>
+  <div class="center-content page-container">
+    <div style="position: relative" class="margin">
+      <video onplay="onPlay(this)" id="inputVideo" autoplay muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="row side-by-side">
+      <!-- fps_meter -->
+      <div id="fps_meter" class="row side-by-side">
+        <div>
+          <label for="time">Time:</label>
+          <input disabled value="-" id="time" type="text" class="bold">
+          <label for="fps">Estimated Fps:</label>
+          <input disabled value="-" id="fps" type="text" class="bold">
+        </div>
+      </div>
+      <!-- fps_meter -->
+    </div>
+  </div>
+  <script>
+    let reference; // 参考图像
+    let options; // The Tiny Face Detector 配置项
+    const scoreThreshold = 0.5; // 人脸最低可信度阈值
+    const inputSize = 224; // 处理图像的尺寸, 越小越快, 但是必须要被32整除
+    // 因此可选128, 160, 224, 320, 416, 512, 608,
+    let forwardTimes = []; // 匹配面部平均计算时间
+    let withBoxes = true; // 画脸部的landmark时, 是否需要带盒子
+
+    function resizeCanvasAndResults(dimensions, canvas, results) {
+      const { width, height } = dimensions instanceof HTMLVideoElement
+        ? faceapi.getMediaDimensions(dimensions)
+        : dimensions
+      canvas.width = width
+      canvas.height = height
+
+      // resize detections (and landmarks) in case displayed image is smaller than
+      // original size
+      return faceapi.resizeResults(results, { width, height })
+    }
+
+    function drawLandmarks(dimensions, canvas, results, withBoxes = true) {
+      const resizedResults = resizeCanvasAndResults(dimensions, canvas, results)
+
+      if (withBoxes) {
+        faceapi.drawDetection(canvas, resizedResults.map(det => det.detection))
+      }
+
+      const faceLandmarks = resizedResults.map(det => det.landmarks)
+      const drawLandmarksOptions = {
+        lineWidth: 2,
+        drawLines: true,
+        color: 'green'
+      }
+      faceapi.drawLandmarks(canvas, faceLandmarks, drawLandmarksOptions)
+    }
+
+
+    function updateTimeStats(timeInMs) {
+      forwardTimes = [timeInMs].concat(forwardTimes).slice(0, 30);
+      const avgTimeInMs = forwardTimes.reduce((total, t) => total + t) / forwardTimes.length;
+      $('#time').val(`${Math.round(avgTimeInMs)} ms`);
+      $('#fps').val(`${faceapi.round(1000 / avgTimeInMs)}`);
+    }
+
+    async function onPlay() {
+        const videoEl = $('#inputVideo').get(0)
+        if (videoEl.paused || videoEl.ended || !faceapi.nets.tinyFaceDetector.params)
+          return setTimeout(() => onPlay())
+
+        const ts = Date.now()
+
+        const result = await faceapi.detectSingleFace(videoEl, options).withFaceLandmarks().withFaceDescriptor()
+
+        if (result) {
+          const faceMatcher = new faceapi.FaceMatcher(result)
+          drawLandmarks(videoEl, $('#overlay').get(0), [result], withBoxes)
+
+          if (reference) {
+            const bestMatch = faceMatcher.findBestMatch(reference.descriptor)
+            console.log(bestMatch)
+          }
+        }
+
+        updateTimeStats(Date.now() - ts)
+        setTimeout(() => onPlay())
+      }
+
+
+    async function run() {
+      // load face detection and face landmark models
+
+      // 这里可以添加"加载样式", 因为要加载model
+      await faceapi.loadTinyFaceDetectorModel('/')  // 等价于 // await faceapi.nets.tinyFaceDetector.load('/')
+      await faceapi.loadFaceLandmarkModel('/')
+      await faceapi.loadFaceRecognitionModel('/')
+      // 取消加载样式
+
+
+      // try to access users webcam and stream the images
+      // to the video element
+      const stream = await navigator.mediaDevices.getUserMedia({ video: {} })
+      const videoEl = $('#inputVideo').get(0)
+      videoEl.srcObject = stream;
+
+      options = new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold })
+
+      const imgEle = document.createElement('img');
+      imgEle.src = '/reference.jpg'
+      reference = await faceapi.detectSingleFace(imgEle, options).withFaceLandmarks().withFaceDescriptor()
+    }
+
+    $(document).ready(function () {
+      run()
+    })
+  </script>
+</body>
+</html>
+
